@@ -29,8 +29,7 @@ from babel.core import (
 from flask import Flask, g, request, session
 from flask_babel import Babel
 
-from sdconfig import SDConfig
-
+from sdconfig import SDConfig, FALLBACK_LOCALE
 
 class RequestLocaleInfo:
     """
@@ -128,27 +127,29 @@ def configure_babel(config: SDConfig, app: Flask) -> Babel:
 
 def validate_locale_configuration(config: SDConfig, babel: Babel) -> None:
     """
-    Ensure that the configured locales are valid and translated.
+    Check that configured locales are available in the filesystem and therefore usable by
+    Babel.  Warn about configured locales that are not usable, unless we're left with
+    no usable default or fallback locale, in which case raise an exception.
     """
-    if config.DEFAULT_LOCALE not in config.SUPPORTED_LOCALES:
-        raise ValueError(
-            'The default locale "{}" is not included in the set of supported locales "{}"'.format(
-                config.DEFAULT_LOCALE, config.SUPPORTED_LOCALES
-            )
-        )
+    available = set(babel.list_translations())  # available in the filesystem
+    available.add(FALLBACK_LOCALE)
+    configured = set(config.SUPPORTED_LOCALES)  # configured by the administrator
+    usable = available & configured  # usable by Babel
 
-    translations = babel.list_translations()
-    for locale in config.SUPPORTED_LOCALES:
-        if locale == "en_US":
-            continue
-
+    # This loop could be replaced with a set operation, but we'd have to iterate over the result
+    # anyway in order to log it.
+    for locale in configured:
         parsed = Locale.parse(locale)
-        if parsed not in translations:
-            raise ValueError(
-                'Configured locale "{}" is not in the set of translated locales "{}"'.format(
-                    parsed, translations
-                )
+        if parsed not in usable:
+            babel.app.logger.error(
+                f'Configured locale "{parsed}" is not in the set of usable locales {usable}'
             )
+
+    defaults = set([config.DEFAULT_LOCALE, FALLBACK_LOCALE]) & usable
+    if len(defaults) == 0:
+        raise ValueError(
+            f'None of the default locales {defaults} is in the set of usable locales {usable}'
+        )
 
 
 LOCALES = collections.OrderedDict()  # type: collections.OrderedDict[str, RequestLocaleInfo]
